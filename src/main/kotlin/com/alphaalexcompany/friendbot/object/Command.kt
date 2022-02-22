@@ -3,6 +3,7 @@ package com.alphaalexcompany.friendbot.`object`
 enum class Command(val value: String) {
     Admin("admin"),
     FillForm("fill_form"),
+    FillFormCancel("fill_form_cancel"),
     FormsChats("forms_chats"),
     FormsChatsCancel("forms_chats_cancel"),
     FormsUsers("forms_users"),

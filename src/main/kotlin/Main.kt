@@ -21,7 +21,13 @@ fun main(args: Array<String>) {
         .required()
     val accessToken by parser.option(ArgType.String, shortName = "t", description = "VK Access token").required()
     val settings by parser.option(ArgType.Choice<LongPollPermissions>(), shortName = "s").multiple()
-        .default(listOf(LongPollPermissions.MessageNew))
+        .default(
+            listOf(
+                LongPollPermissions.MessageNew,
+                LongPollPermissions.MessageAllow,
+                LongPollPermissions.MessageDeny
+            )
+        )
     parser.parse(args)
 
     val logFile = File(System.getenv("BOT_LOGS"))

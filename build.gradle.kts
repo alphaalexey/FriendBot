@@ -18,7 +18,7 @@ repositories {
 
 dependencies {
     implementation(files("libs/sdk-1.0.9.jar"))
-    implementation("com.google.code.gson:gson:2.8.9")
+    implementation("com.google.code.gson:gson:2.9.0")
     implementation("org.apache.commons:commons-text:1.9")
     implementation("org.apache.commons:commons-lang3:3.12.0")
     implementation("org.apache.commons:commons-collections4:4.4")

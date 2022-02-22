@@ -5,5 +5,7 @@ enum class InputCommand(val value: String) {
     SearchChat("search_chat"),
     SearchUser("search_user"),
     SetAdmin("set_admin"),
-    SetAge("set_age")
+    SetAge("set_age"),
+    SetInterest("set_interest"),
+    SetInterestData("set_interest_data")
 }

@@ -24,21 +24,24 @@ class VkBot(
     private val actor: GroupActor
 ) : CallbackApiLongPoll(client, actor) {
     private val database = mongoClient.getDatabase("friend-bot")
-    private val users = database.getCollection<User>()
     private val chats = database.getCollection<Chat>()
+    private val interests = database.getCollection<Interest>()
+    private val users = database.getCollection<User>()
     private val translations = database.getCollection<Translation>()
 
-    private fun work(user: User, translation: Translation, message: MessageNew, userId: Int, payload: String) {
+    private fun work(user: User, translation: Translation, message: MessageNew, payload: String) {
         if (message.message.text.lowercase() == translation.data["message_stuck"]) {
+            user.command = null
+            users.updateOne(user)
             message.message.text = ""
-            work(user, translation, message, userId, Command.Start.value)
+            work(user, translation, message, Command.Start.value)
         } else {
             when (payload) {
                 Command.Start.value -> {
                     client.messages().send(actor)
                         .keyboard(createStartKeyboard(translation))
                         .message(translation.data["message_start"])
-                        .peerId(userId)
+                        .peerId(user.id)
                         .randomId(Random.nextInt())
                         .execute()
                 }
@@ -47,37 +50,98 @@ class VkBot(
                         client.messages().send(actor)
                             .keyboard(createMenuKeyboard(user, translation))
                             .message(translation.data["message_menu"])
-                            .peerId(userId)
+                            .peerId(user.id)
                             .randomId(Random.nextInt())
                             .execute()
                     } else {
-                        work(user, translation, message, userId, Command.SetAge.value)
+                        work(user, translation, message, Command.SetAge.value)
                     }
                 }
                 Command.FillForm.value -> {
-                    //TODO("Add something")
-                    client.messages().send(actor)
-                        .message(translation.data["message_fill_form"])
-                        .peerId(userId)
-                        .randomId(Random.nextInt())
-                        .execute()
+                    user.command = InputCommand.SetInterest
+                    users.updateOne(user)
+                    val userInterests = interests.find(Interest::userId eq user.id)
+                    val emptyInterests = interests.find(and(Interest::userId eq user.id, Interest::data eq ""))
+                    if (emptyInterests.none()) {
+                        val hasNoInterests: Boolean = userInterests.none()
+                        client.messages().send(actor)
+                            .keyboard(
+                                if (hasNoInterests) {
+                                    createEmptyKeyboard()
+                                } else {
+                                    createCancelKeyboard(translation, Command.FillFormCancel.value)
+                                }
+                            )
+                            .message(translation.data["message_current_interests"])
+                            .peerId(user.id)
+                            .randomId(Random.nextInt())
+                            .execute()
+                        if (hasNoInterests) {
+                            client.messages().send(actor)
+                                .message(translation.data["message_no_interests"])
+                                .peerId(user.id)
+                                .randomId(Random.nextInt())
+                                .execute()
+                        } else {
+                            userInterests.forEach {
+                                client.messages().send(actor)
+                                    .message("${translation.data[it.theme.value]}\n- ${it.data}")
+                                    .peerId(user.id)
+                                    .randomId(Random.nextInt())
+                                    .execute()
+                            }
+                        }
+                        client.messages().send(actor)
+                            .message(translation.data["message_add_interest"])
+                            .peerId(user.id)
+                            .randomId(Random.nextInt())
+                            .execute()
+                        client.messages().send(actor)
+                            .message(Theme.values().joinToString("\n") {
+                                "${it.ordinal + 1}. ${translation.data[it.value]}"
+                            })
+                            .peerId(user.id)
+                            .randomId(Random.nextInt())
+                            .execute()
+                    } else {
+                        user.command = InputCommand.SetInterestData
+                        users.updateOne(user)
+                        client.messages().send(actor)
+                            .keyboard(createEmptyKeyboard())
+                            .message(translation.data["message_has_empty_interests"])
+                            .peerId(user.id)
+                            .randomId(Random.nextInt())
+                            .execute()
+                        client.messages().send(actor)
+                            .keyboard(createEmptyKeyboard())
+                            .message(translation.data[emptyInterests.first()?.theme?.value])
+                            .peerId(user.id)
+                            .randomId(Random.nextInt())
+                            .execute()
+                        client.messages().send(actor)
+                            .message(translation.data["message_set_interest_data"])
+                            .peerId(user.id)
+                            .randomId(Random.nextInt())
+                            .execute()
+                    }
+                }
+                Command.FillFormCancel.value -> {
+                    user.command = null
+                    users.updateOne(user)
+                    work(user, translation, message, Command.Menu.value)
                 }
                 Command.FormsUsers.value -> {
-                    //TODO("Add something")
-                    work(user, translation, message, userId, Command.FillForm.value)
-                    /*user.command = InputCommand.SearchUser
-                    users.updateOne(user)
-                    client.messages().send(actor)
-                        .keyboard(createCancelKeyboard(translation, Command.FormsUsersCancel.value))
-                        .message(translation.data["message_forms_choose"])
-                        .peerId(userId)
-                        .randomId(Random.nextInt())
-                        .execute()
-                    client.messages().send(actor)
-                        .message("AMOGUS")
-                        .peerId(userId)
-                        .randomId(Random.nextInt())
-                        .execute()*/
+                    val userInterests = interests.find(Interest::userId eq user.id)
+                    if (userInterests.none()) {
+                        client.messages().send(actor)
+                            .message(translation.data["message_fill_form"])
+                            .peerId(user.id)
+                            .randomId(Random.nextInt())
+                            .execute()
+                        work(user, translation, message, Command.FillForm.value)
+                    } else {
+                        //TODO("Add user search algo")
+                    }
                 }
                 Command.FormsChats.value -> {
                     user.command = InputCommand.SearchChat
@@ -85,27 +149,27 @@ class VkBot(
                     client.messages().send(actor)
                         .keyboard(createCancelKeyboard(translation, Command.FormsChatsCancel.value))
                         .message(translation.data["message_forms_choose"])
-                        .peerId(userId)
+                        .peerId(user.id)
                         .randomId(Random.nextInt())
                         .execute()
                     client.messages().send(actor)
                         .message(Theme.values().joinToString("\n") {
-                            "%d. %s".format(it.ordinal + 1, translation.data["chat_type_" + it.value])
+                            "${it.ordinal + 1}. ${translation.data[it.value]}"
                         })
-                        .peerId(userId)
+                        .peerId(user.id)
                         .randomId(Random.nextInt())
                         .execute()
                 }
                 Command.FormsChatsCancel.value -> {
                     user.command = null
                     users.updateOne(user)
-                    work(user, translation, message, userId, Command.Menu.value)
+                    work(user, translation, message, Command.Menu.value)
                 }
                 Command.Settings.value -> {
                     client.messages().send(actor)
                         .keyboard(createSettingsKeyboard(translation))
                         .message(translation.data["message_settings"])
-                        .peerId(userId)
+                        .peerId(user.id)
                         .randomId(Random.nextInt())
                         .execute()
                 }
@@ -121,19 +185,19 @@ class VkBot(
                             }
                         )
                         .message(translation.data["message_set_age"])
-                        .peerId(userId)
+                        .peerId(user.id)
                         .randomId(Random.nextInt())
                         .execute()
                 }
                 Command.SetAgeCancel.value -> {
                     user.command = null
                     users.updateOne(user)
-                    work(user, translation, message, userId, Command.Settings.value)
+                    work(user, translation, message, Command.Settings.value)
                 }
                 Command.Subscription.value -> {
                     client.messages().send(actor)
                         .message(translation.data["message_subscription"])
-                        .peerId(userId)
+                        .peerId(user.id)
                         .randomId(Random.nextInt())
                         .execute()
                 }
@@ -141,7 +205,7 @@ class VkBot(
                     client.messages().send(actor)
                         .keyboard(createAdminKeyboard(user, translation))
                         .message(translation.data["message_admin"])
-                        .peerId(userId)
+                        .peerId(user.id)
                         .randomId(Random.nextInt())
                         .execute()
                 }
@@ -151,7 +215,7 @@ class VkBot(
                     client.messages().send(actor)
                         .keyboard(createCancelKeyboard(translation, Command.RemoveAdminCancel.value))
                         .message(translation.data["message_remove_admin"])
-                        .peerId(userId)
+                        .peerId(user.id)
                         .randomId(Random.nextInt())
                         .execute()
                 }
@@ -161,20 +225,20 @@ class VkBot(
                     client.messages().send(actor)
                         .keyboard(createCancelKeyboard(translation, Command.SetAdminCancel.value))
                         .message(translation.data["message_set_admin"])
-                        .peerId(userId)
+                        .peerId(user.id)
                         .randomId(Random.nextInt())
                         .execute()
                 }
                 Command.RemoveAdminCancel.value, Command.SetAdminCancel.value -> {
                     user.command = null
                     users.updateOne(user)
-                    work(user, translation, message, userId, Command.Admin.value)
+                    work(user, translation, message, Command.Admin.value)
                 }
                 Command.Stop.value -> {
                     client.messages().send(actor)
                         .keyboard(createMenuKeyboard(user, translation))
                         .message(translation.data["message_stop"])
-                        .peerId(userId)
+                        .peerId(user.id)
                         .randomId(Random.nextInt())
                         .execute()
                     exitProcess(0)
@@ -184,7 +248,7 @@ class VkBot(
                         InputCommand.RemoveAdmin -> {
                             try {
                                 val adminId: Int = message.message.text.toInt()
-                                val admin: User = users.findOne(User::id eq adminId)!!
+                                val admin: User = users.findOneById(adminId)!!
                                 if (UserLevel.ADMIN <= admin.level && admin.level < user.level) {
                                     admin.level = UserLevel.USER
                                     users.updateOne(admin)
@@ -199,14 +263,14 @@ class VkBot(
                                     client.messages().send(actor)
                                         .keyboard(createAdminKeyboard(user, translation))
                                         .message(translation.data["message_remove_admin_success"])
-                                        .peerId(userId)
+                                        .peerId(user.id)
                                         .randomId(Random.nextInt())
                                         .execute()
                                 } else {
                                     client.messages().send(actor)
                                         .keyboard(createAdminKeyboard(user, translation))
                                         .message(translation.data["message_remove_admin_forbidden"])
-                                        .peerId(userId)
+                                        .peerId(user.id)
                                         .randomId(Random.nextInt())
                                         .execute()
                                 }
@@ -215,7 +279,7 @@ class VkBot(
                             } catch (_: Exception) {
                                 client.messages().send(actor)
                                     .message(translation.data["message_remove_admin_failed"])
-                                    .peerId(userId)
+                                    .peerId(user.id)
                                     .randomId(Random.nextInt())
                                     .execute()
                             }
@@ -223,21 +287,21 @@ class VkBot(
                         InputCommand.SetAdmin -> {
                             try {
                                 val adminId: Int = message.message.text.toInt()
-                                val admin: User = users.findOne(User::id eq adminId)!!
+                                val admin: User = users.findOneById(adminId)!!
                                 if (admin.level < UserLevel.ADMIN && user.level > UserLevel.ADMIN) {
                                     admin.level = UserLevel.ADMIN
                                     users.updateOne(admin)
                                     client.messages().send(actor)
                                         .keyboard(createAdminKeyboard(user, translation))
                                         .message(translation.data["message_set_admin_success"])
-                                        .peerId(userId)
+                                        .peerId(user.id)
                                         .randomId(Random.nextInt())
                                         .execute()
                                 } else {
                                     client.messages().send(actor)
                                         .keyboard(createAdminKeyboard(user, translation))
                                         .message(translation.data["message_set_admin_forbidden"])
-                                        .peerId(userId)
+                                        .peerId(user.id)
                                         .randomId(Random.nextInt())
                                         .execute()
                                 }
@@ -246,7 +310,7 @@ class VkBot(
                             } catch (_: Exception) {
                                 client.messages().send(actor)
                                     .message(translation.data["message_set_admin_failed"])
-                                    .peerId(userId)
+                                    .peerId(user.id)
                                     .randomId(Random.nextInt())
                                     .execute()
                             }
@@ -261,20 +325,76 @@ class VkBot(
                                     client.messages().send(actor)
                                         .keyboard(createMenuKeyboard(user, translation))
                                         .message(translation.data["message_set_age_success"])
-                                        .peerId(userId)
+                                        .peerId(user.id)
                                         .randomId(Random.nextInt())
                                         .execute()
                                 } else {
                                     client.messages().send(actor)
                                         .message(translation.data["message_set_age_incorrect"])
-                                        .peerId(userId)
+                                        .peerId(user.id)
                                         .randomId(Random.nextInt())
                                         .execute()
                                 }
                             } catch (e: Exception) {
                                 client.messages().send(actor)
                                     .message(translation.data["message_set_age_failed"])
-                                    .peerId(userId)
+                                    .peerId(user.id)
+                                    .randomId(Random.nextInt())
+                                    .execute()
+                            }
+                        }
+                        InputCommand.SetInterest -> {
+                            try {
+                                val index: Int = message.message.text.toInt() - 1
+                                val themes = Theme.values()
+                                if (index in themes.indices) {
+                                    interests.insertOne(Interest(user.id, themes[index]))
+                                    client.messages().send(actor)
+                                        .message(translation.data["message_set_interest_data"])
+                                        .peerId(user.id)
+                                        .randomId(Random.nextInt())
+                                        .execute()
+                                    user.command = InputCommand.SetInterestData
+                                    users.updateOne(user)
+                                } else {
+                                    client.messages().send(actor)
+                                        .message(translation.data["message_set_interest_incorrect"])
+                                        .peerId(user.id)
+                                        .randomId(Random.nextInt())
+                                        .execute()
+                                }
+                            } catch (e: Exception) {
+                                client.messages().send(actor)
+                                    .message(translation.data["message_set_interest_failed"])
+                                    .peerId(user.id)
+                                    .randomId(Random.nextInt())
+                                    .execute()
+                            }
+                        }
+                        InputCommand.SetInterestData -> {
+                            if (message.message.text.isNotEmpty()) {
+                                interests.findOne(Interest::data eq "")?.let { interest ->
+                                    interest.data = message.message.text
+                                    interests.updateOne(interest)
+                                    client.messages().send(actor)
+                                        .message(translation.data["message_set_interest_data_success"])
+                                        .peerId(user.id)
+                                        .randomId(Random.nextInt())
+                                        .execute()
+                                    user.command = null
+                                    users.updateOne(user)
+                                    work(user, translation, message, Command.FillForm.value)
+                                } ?: run {
+                                    client.messages().send(actor)
+                                        .message(translation.data["message_set_interest_data_failed"])
+                                        .peerId(user.id)
+                                        .randomId(Random.nextInt())
+                                        .execute()
+                                }
+                            } else {
+                                client.messages().send(actor)
+                                    .message(translation.data["message_set_interest_data_failed"])
+                                    .peerId(user.id)
                                     .randomId(Random.nextInt())
                                     .execute()
                             }
@@ -283,8 +403,8 @@ class VkBot(
                             try {
                                 val index: Int = message.message.text.toInt() - 1
                                 val themes = Theme.values()
-                                if (index in 0..themes.size) {
-                                    val chat = chats.find(Chat::theme eq themes[index]).toList().map { group ->
+                                if (index in themes.indices) {
+                                    val chat = chats.find(Chat::theme eq themes[index]).map { group ->
                                         client.messages().getConversationsById(actor, group.id)
                                             .execute().items.first()
                                     }.filter { chat -> chat.chatSettings.membersCount < 20 }.randomOrNull()
@@ -292,21 +412,21 @@ class VkBot(
                                         client.messages().send(actor)
                                             .keyboard(createMenuKeyboard(user, translation))
                                             .message(translation.data["message_set_chat_success"])
-                                            .peerId(userId)
+                                            .peerId(user.id)
                                             .randomId(Random.nextInt())
                                             .execute()
                                         client.messages().send(actor)
                                             .message(
                                                 client.messages().getInviteLink(actor, chat.peer.id).execute().link
                                             )
-                                            .peerId(userId)
+                                            .peerId(user.id)
                                             .randomId(Random.nextInt())
                                             .execute()
                                     } else {
                                         client.messages().send(actor)
                                             .keyboard(createMenuKeyboard(user, translation))
                                             .message(translation.data["message_set_chat_no_left"])
-                                            .peerId(userId)
+                                            .peerId(user.id)
                                             .randomId(Random.nextInt())
                                             .execute()
                                     }
@@ -315,14 +435,14 @@ class VkBot(
                                 } else {
                                     client.messages().send(actor)
                                         .message(translation.data["message_set_chat_incorrect"])
-                                        .peerId(userId)
+                                        .peerId(user.id)
                                         .randomId(Random.nextInt())
                                         .execute()
                                 }
                             } catch (e: Exception) {
                                 client.messages().send(actor)
                                     .message(translation.data["message_set_chat_failed"])
-                                    .peerId(userId)
+                                    .peerId(user.id)
                                     .randomId(Random.nextInt())
                                     .execute()
                             }
@@ -330,7 +450,7 @@ class VkBot(
                         else -> {
                             client.messages().send(actor)
                                 .message(translation.data["message_unknown"])
-                                .peerId(userId)
+                                .peerId(user.id)
                                 .randomId(Random.nextInt())
                                 .execute()
                         }
@@ -347,7 +467,7 @@ class VkBot(
             val user = client.users().get(actor).userIds(userId.toString()).execute().first()
             LOG.info("{} {}(id{}) разрешил доступ.", user.firstName, user.lastName, userId)
 
-            users.findOne(User::id eq userId)?.let { botUser ->
+            users.findOneById(userId)?.let { botUser ->
                 botUser.stopped = false
                 users.updateOne(botUser)
 
@@ -361,7 +481,9 @@ class VkBot(
                         .randomId(Random.nextInt())
                         .execute()
                 }
-            } ?: users.insertOne(User(userId))
+            } ?: run {
+                users.insertOne(User(userId))
+            }
         }
     }
 
@@ -372,7 +494,7 @@ class VkBot(
             val user = client.users().get(actor).userIds(userId.toString()).execute().first()
             LOG.info("{} {}(id{}) запретил доступ.", user.firstName, user.lastName, userId)
 
-            users.updateOne(User::id eq userId, setValue(User::stopped, true))
+            users.updateOneById(userId, setValue(User::stopped, true))
         }
     }
 
@@ -386,7 +508,7 @@ class VkBot(
 
                 var isNewUser = false
 
-                var botUser = users.findOne(User::id eq peerId)
+                var botUser = users.findOneById(peerId)
                 if (botUser == null) {
                     isNewUser = true
                     botUser = User(peerId)
@@ -398,7 +520,6 @@ class VkBot(
                         botUser,
                         translation,
                         message,
-                        peerId,
                         if (isNewUser) {
                             Command.Start.value
                         } else {

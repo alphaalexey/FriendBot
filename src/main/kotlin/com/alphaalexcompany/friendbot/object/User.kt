@@ -8,7 +8,6 @@ data class User(
     var lang: Lang = Lang.RU,
     var level: UserLevel = UserLevel.USER,
     var command: InputCommand? = null,
-    var about: String = "",
     var subscription: Boolean = false,
     var stopped: Boolean = false
 )
