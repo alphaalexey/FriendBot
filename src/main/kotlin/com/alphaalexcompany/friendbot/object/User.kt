@@ -9,5 +9,6 @@ data class User(
     var level: UserLevel = UserLevel.USER,
     var command: InputCommand? = null,
     var subscription: Boolean = false,
-    var stopped: Boolean = false
+    var stopped: Boolean = false,
+    var liked: ArrayList<Int> = arrayListOf()
 )

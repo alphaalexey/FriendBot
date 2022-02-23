@@ -12,6 +12,7 @@ import com.vk.api.sdk.objects.callback.MessageDeny
 import com.vk.api.sdk.objects.callback.MessageNew
 import com.vk.api.sdk.objects.callback.MessageTypingState
 import com.vk.api.sdk.objects.messages.*
+import org.bson.types.ObjectId
 import org.litote.kmongo.*
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -29,14 +30,14 @@ class VkBot(
     private val users = database.getCollection<User>()
     private val translations = database.getCollection<Translation>()
 
-    private fun work(user: User, translation: Translation, message: MessageNew, payload: String) {
+    private fun work(user: User, translation: Translation, message: MessageNew, payload: Payload) {
         if (message.message.text.lowercase() == translation.data["message_stuck"]) {
             user.command = null
             users.updateOne(user)
             message.message.text = ""
-            work(user, translation, message, Command.Start.value)
+            work(user, translation, message, Payload().setCommand(Command.Start.value))
         } else {
-            when (payload) {
+            when (payload.command) {
                 Command.Start.value -> {
                     client.messages().send(actor)
                         .keyboard(createStartKeyboard(translation))
@@ -54,7 +55,7 @@ class VkBot(
                             .randomId(Random.nextInt())
                             .execute()
                     } else {
-                        work(user, translation, message, Command.SetAge.value)
+                        work(user, translation, message, Payload().setCommand(Command.SetAge.value))
                     }
                 }
                 Command.FillForm.value -> {
@@ -83,9 +84,10 @@ class VkBot(
                                 .randomId(Random.nextInt())
                                 .execute()
                         } else {
-                            userInterests.forEach {
+                            userInterests.forEach { interest ->
                                 client.messages().send(actor)
-                                    .message("${translation.data[it.theme.value]}\n- ${it.data}")
+                                    .keyboard(createRemoveKeyboard(translation, interest.id.toString()))
+                                    .message("${translation.data[interest.theme.value]}\n- ${interest.data}")
                                     .peerId(user.id)
                                     .randomId(Random.nextInt())
                                     .execute()
@@ -97,8 +99,8 @@ class VkBot(
                             .randomId(Random.nextInt())
                             .execute()
                         client.messages().send(actor)
-                            .message(Theme.values().joinToString("\n") {
-                                "${it.ordinal + 1}. ${translation.data[it.value]}"
+                            .message(Theme.values().joinToString("\n") { theme ->
+                                "${theme.ordinal + 1}. ${translation.data[theme.value]}"
                             })
                             .peerId(user.id)
                             .randomId(Random.nextInt())
@@ -128,7 +130,16 @@ class VkBot(
                 Command.FillFormCancel.value -> {
                     user.command = null
                     users.updateOne(user)
-                    work(user, translation, message, Command.Menu.value)
+                    work(user, translation, message, Payload().setCommand(Command.Menu.value))
+                }
+                Command.RemoveInterest.value -> {
+                    if (interests.deleteOneById(ObjectId(payload.data)).deletedCount == 1L) {
+                        client.messages().send(actor)
+                            .message(translation.data["message_removed"])
+                            .peerId(user.id)
+                            .randomId(Random.nextInt())
+                            .execute()
+                    }
                 }
                 Command.FormsUsers.value -> {
                     val userInterests = interests.find(Interest::userId eq user.id)
@@ -138,10 +149,111 @@ class VkBot(
                             .peerId(user.id)
                             .randomId(Random.nextInt())
                             .execute()
-                        work(user, translation, message, Command.FillForm.value)
+                        work(user, translation, message, Payload().setCommand(Command.FillForm.value))
                     } else {
-                        //TODO("Add user search algo")
+                        client.messages().send(actor)
+                            .message(translation.data["message_searching"])
+                            .peerId(user.id)
+                            .randomId(Random.nextInt())
+                            .execute()
+                        work(user, translation, message, Payload().setCommand(Command.Search.value))
                     }
+                }
+                Command.Search.value -> {
+                    val userInterests = interests.find(Interest::userId eq user.id)
+                    val userThemes = userInterests.map { it.theme }
+                    val suitableInterests = interests.find(
+                        and(
+                            Interest::userId ne user.id,
+                            Interest::userId nin user.liked,
+                            Interest::theme `in` userThemes,
+                            Interest::data ne ""
+                        )
+                    )
+                    var found = false
+                    suitableInterests.shuffled().forEach { suitableInterest ->
+                        val userId = suitableInterest.userId
+                        val foundResponse = client.users().get(actor).userIds(userId.toString()).execute()
+                        if (foundResponse.size == 1) {
+                            found = true
+                            val foundUser = foundResponse[0]
+                            users.findOneById(userId)?.let { userData ->
+                                client.messages().send(actor)
+                                    .keyboard(createSearchKeyboard(translation, userId.toString()))
+                                    .message("${foundUser.firstName} (${userData.age})")
+                                    .peerId(user.id)
+                                    .randomId(Random.nextInt())
+                                    .execute()
+                                interests.find(
+                                    and(
+                                        Interest::userId eq userId,
+                                        Interest::theme `in` userThemes,
+                                        Interest::data ne ""
+                                    )
+                                ).shuffled().first().let { interest ->
+                                    client.messages().send(actor)
+                                        .message("${translation.data[interest.theme.value]}\n- ${interest.data}")
+                                        .peerId(user.id)
+                                        .randomId(Random.nextInt())
+                                        .execute()
+                                }
+                                return
+                            }
+                        }
+                    }
+                    if (!found) {
+                        client.messages().send(actor)
+                            .keyboard(createMenuKeyboard(user, translation))
+                            .message(translation.data["message_search_empty"])
+                            .peerId(user.id)
+                            .randomId(Random.nextInt())
+                            .execute()
+                    }
+                }
+                Command.Like.value -> {
+                    val userId = payload.data.toInt()
+                    user.liked.add(userId)
+                    users.updateOne(user)
+                    client.messages().send(actor)
+                        .message(translation.data["message_liked_user"])
+                        .peerId(user.id)
+                        .randomId(Random.nextInt())
+                        .execute()
+                    users.findOneById(userId)?.let { likedUser ->
+                        if (user.id in likedUser.liked) {
+                            client.messages().send(actor)
+                                .message(translation.data["message_both_liked"])
+                                .peerId(user.id)
+                                .randomId(Random.nextInt())
+                                .execute()
+                            client.messages().send(actor)
+                                .message(
+                                    "${
+                                        client.users().get(actor).userIds(userId.toString()).execute()[0].firstName
+                                    } (${likedUser.age})\n@id$userId"
+                                )
+                                .peerId(user.id)
+                                .randomId(Random.nextInt())
+                                .execute()
+                            if (!likedUser.stopped) {
+                                client.messages().send(actor)
+                                    .message(translation.data["message_both_liked"])
+                                    .peerId(userId)
+                                    .randomId(Random.nextInt())
+                                    .execute()
+                                client.messages().send(actor)
+                                    .message(
+                                        "${
+                                            client.users().get(actor).userIds(user.id.toString()).execute()[0].firstName
+                                        } (${user.age})\n@id$userId"
+                                    )
+                                    .peerId(userId)
+                                    .randomId(Random.nextInt())
+                                    .execute()
+                            }
+                        }
+                    }
+                    work(user, translation, message, Payload().setCommand(Command.Search.value))
                 }
                 Command.FormsChats.value -> {
                     user.command = InputCommand.SearchChat
@@ -153,8 +265,8 @@ class VkBot(
                         .randomId(Random.nextInt())
                         .execute()
                     client.messages().send(actor)
-                        .message(Theme.values().joinToString("\n") {
-                            "${it.ordinal + 1}. ${translation.data[it.value]}"
+                        .message(Theme.values().joinToString("\n") { theme ->
+                            "${theme.ordinal + 1}. ${translation.data[theme.value]}"
                         })
                         .peerId(user.id)
                         .randomId(Random.nextInt())
@@ -163,7 +275,7 @@ class VkBot(
                 Command.FormsChatsCancel.value -> {
                     user.command = null
                     users.updateOne(user)
-                    work(user, translation, message, Command.Menu.value)
+                    work(user, translation, message, Payload().setCommand(Command.Menu.value))
                 }
                 Command.Settings.value -> {
                     client.messages().send(actor)
@@ -192,7 +304,7 @@ class VkBot(
                 Command.SetAgeCancel.value -> {
                     user.command = null
                     users.updateOne(user)
-                    work(user, translation, message, Command.Settings.value)
+                    work(user, translation, message, Payload().setCommand(Command.Settings.value))
                 }
                 Command.Subscription.value -> {
                     client.messages().send(actor)
@@ -232,7 +344,7 @@ class VkBot(
                 Command.RemoveAdminCancel.value, Command.SetAdminCancel.value -> {
                     user.command = null
                     users.updateOne(user)
-                    work(user, translation, message, Command.Admin.value)
+                    work(user, translation, message, Payload().setCommand(Command.Admin.value))
                 }
                 Command.Stop.value -> {
                     client.messages().send(actor)
@@ -383,7 +495,7 @@ class VkBot(
                                         .execute()
                                     user.command = null
                                     users.updateOne(user)
-                                    work(user, translation, message, Command.FillForm.value)
+                                    work(user, translation, message, Payload().setCommand(Command.FillForm.value))
                                 } ?: run {
                                     client.messages().send(actor)
                                         .message(translation.data["message_set_interest_data_failed"])
@@ -521,12 +633,13 @@ class VkBot(
                         translation,
                         message,
                         if (isNewUser) {
-                            Command.Start.value
+                            Payload()
+                                .setCommand(Command.Start.value)
                         } else {
                             GSON.fromJson(
-                                message.message.payload,
+                                message.message.payload ?: GSON.toJson(Payload()),
                                 Payload::class.java
-                            )?.command ?: ""
+                            )
                         }
                     )
                 }
@@ -641,6 +754,74 @@ class VkBot(
             buttons.add(row)
 
             return Keyboard().setButtons(buttons)
+        }
+
+        @JvmStatic
+        private fun createSearchKeyboard(translation: Translation, data: String): Keyboard {
+            return Keyboard()
+                .setButtons(
+                    listOf(
+                        listOf(
+                            KeyboardButton()
+                                .setAction(
+                                    KeyboardButtonAction()
+                                        .setLabel(translation.data["label_like"])
+                                        .setPayload(
+                                            GSON.toJson(
+                                                Payload()
+                                                    .setCommand(Command.Like.value)
+                                                    .setData(data)
+                                            )
+                                        )
+                                        .setType(TemplateActionTypeNames.TEXT)
+                                )
+                                .setColor(KeyboardButtonColor.POSITIVE),
+                            KeyboardButton()
+                                .setAction(
+                                    KeyboardButtonAction()
+                                        .setLabel(translation.data["label_next"])
+                                        .setPayload(GSON.toJson(Payload().setCommand(Command.Search.value)))
+                                        .setType(TemplateActionTypeNames.TEXT)
+                                )
+                        ),
+                        listOf(
+                            KeyboardButton()
+                                .setAction(
+                                    KeyboardButtonAction()
+                                        .setLabel(translation.data["label_menu"])
+                                        .setPayload(GSON.toJson(Payload().setCommand(Command.Menu.value)))
+                                        .setType(TemplateActionTypeNames.TEXT)
+                                )
+                                .setColor(KeyboardButtonColor.POSITIVE)
+                        )
+                    )
+                )
+        }
+
+        @JvmStatic
+        private fun createRemoveKeyboard(translation: Translation, data: String): Keyboard {
+            return Keyboard()
+                .setButtons(
+                    listOf(
+                        listOf(
+                            KeyboardButton()
+                                .setAction(
+                                    KeyboardButtonAction()
+                                        .setLabel(translation.data["label_remove"])
+                                        .setPayload(
+                                            GSON.toJson(
+                                                Payload()
+                                                    .setCommand(Command.RemoveInterest.value)
+                                                    .setData(data)
+                                            )
+                                        )
+                                        .setType(TemplateActionTypeNames.TEXT)
+                                )
+                                .setColor(KeyboardButtonColor.NEGATIVE)
+                        )
+                    )
+                )
+                .setInline(true)
         }
 
         @JvmStatic
