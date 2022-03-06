@@ -16,9 +16,7 @@ enum class Command(val value: String) {
     SetAdmin("set_admin"),
     SetAdminCancel("set_admin_cancel"),
     SetAge("set_age"),
-    SetAgeCancel("set_age_cancel"),
-    Settings("settings"),
     Start("start"),
     Stop("stop"),
-    Subscription("subscription")
+    ViewLike("view_like")
 }

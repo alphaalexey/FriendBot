@@ -63,11 +63,7 @@ fun main(args: Array<String>) {
         routing {
             authenticate("auth-basic") {
                 get("/") {
-                    call.respondText(
-                        "It is %s".format(
-                            ZonedDateTime.now().format(DateTimeFormatter.RFC_1123_DATE_TIME)
-                        )
-                    )
+                    call.respondText("It is ${ZonedDateTime.now().format(DateTimeFormatter.RFC_1123_DATE_TIME)}")
                 }
                 get("/api/log") {
                     call.respondFile(logFile)

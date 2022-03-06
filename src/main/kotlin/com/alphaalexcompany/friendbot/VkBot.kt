@@ -38,15 +38,7 @@ class VkBot(
             work(user, translation, message, Payload().setCommand(Command.Start.value))
         } else {
             when (payload.command) {
-                Command.Start.value -> {
-                    client.messages().send(actor)
-                        .keyboard(createStartKeyboard(translation))
-                        .message(translation.data["message_start"])
-                        .peerId(user.id)
-                        .randomId(Random.nextInt())
-                        .execute()
-                }
-                Command.Menu.value -> {
+                Command.Start.value, Command.Menu.value -> {
                     if (user.age != 0) {
                         client.messages().send(actor)
                             .keyboard(createMenuKeyboard(user, translation))
@@ -70,7 +62,10 @@ class VkBot(
                                 if (hasNoInterests) {
                                     createEmptyKeyboard()
                                 } else {
-                                    createCancelKeyboard(translation, Command.FillFormCancel.value)
+                                    createCancelKeyboard(
+                                        translation,
+                                        Payload().setCommand(Command.FillFormCancel.value)
+                                    )
                                 }
                             )
                             .message(translation.data["message_current_interests"])
@@ -121,7 +116,7 @@ class VkBot(
                             .randomId(Random.nextInt())
                             .execute()
                         client.messages().send(actor)
-                            .message(translation.data["message_set_interest_data"])
+                            .message(translation.data["message_set_interest_data_" + emptyInterests.first()?.theme?.value])
                             .peerId(user.id)
                             .randomId(Random.nextInt())
                             .execute()
@@ -179,7 +174,6 @@ class VkBot(
                             val foundUser = foundResponse[0]
                             users.findOneById(userId)?.let { userData ->
                                 client.messages().send(actor)
-                                    .keyboard(createSearchKeyboard(translation, userId.toString()))
                                     .message("${foundUser.firstName} (${userData.age})")
                                     .peerId(user.id)
                                     .randomId(Random.nextInt())
@@ -192,6 +186,12 @@ class VkBot(
                                     )
                                 ).shuffled().first().let { interest ->
                                     client.messages().send(actor)
+                                        .keyboard(
+                                            createSearchKeyboard(
+                                                translation,
+                                                GSON.toJson(SearchData(userId, interest.theme))
+                                            )
+                                        )
                                         .message("${translation.data[interest.theme.value]}\n- ${interest.data}")
                                         .peerId(user.id)
                                         .randomId(Random.nextInt())
@@ -211,7 +211,8 @@ class VkBot(
                     }
                 }
                 Command.Like.value -> {
-                    val userId = payload.data.toInt()
+                    val searchData = GSON.fromJson(payload.data, SearchData::class.java)
+                    val userId = searchData.userId
                     user.liked.add(userId)
                     users.updateOne(user)
                     client.messages().send(actor)
@@ -245,8 +246,22 @@ class VkBot(
                                     .message(
                                         "${
                                             client.users().get(actor).userIds(user.id.toString()).execute()[0].firstName
-                                        } (${user.age})\n@id$userId"
+                                        } (${user.age})\n@id${user.id}"
                                     )
+                                    .peerId(userId)
+                                    .randomId(Random.nextInt())
+                                    .execute()
+                            }
+                        } else {
+                            if (!likedUser.stopped) {
+                                client.messages().send(actor)
+                                    .keyboard(
+                                        createLikedKeyboard(
+                                            translation,
+                                            GSON.toJson(SearchData(user.id, searchData.theme))
+                                        )
+                                    )
+                                    .message(translation.data["message_liked"])
                                     .peerId(userId)
                                     .randomId(Random.nextInt())
                                     .execute()
@@ -255,11 +270,46 @@ class VkBot(
                     }
                     work(user, translation, message, Payload().setCommand(Command.Search.value))
                 }
+                Command.ViewLike.value -> {
+                    val searchData = GSON.fromJson(payload.data, SearchData::class.java)
+                    val userId = searchData.userId
+                    val foundResponse = client.users().get(actor).userIds(userId.toString()).execute()
+                    if (foundResponse.size == 1) {
+                        val foundUser = foundResponse[0]
+                        users.findOneById(userId)?.let { userData ->
+                            interests.find(
+                                and(
+                                    Interest::userId eq userId,
+                                    Interest::theme eq searchData.theme,
+                                    Interest::data ne ""
+                                )
+                            ).firstOrNull()?.let { interest ->
+                                client.messages().send(actor)
+                                    .keyboard(createSearchKeyboard(translation, payload.data))
+                                    .message("${foundUser.firstName} (${userData.age})")
+                                    .peerId(user.id)
+                                    .randomId(Random.nextInt())
+                                    .execute()
+                                client.messages().send(actor)
+                                    .keyboard(createSearchKeyboard(translation, GSON.toJson(interest)))
+                                    .message("${translation.data[interest.theme.value]}\n- ${interest.data}")
+                                    .peerId(user.id)
+                                    .randomId(Random.nextInt())
+                                    .execute()
+                            }
+                        }
+                    }
+                }
                 Command.FormsChats.value -> {
                     user.command = InputCommand.SearchChat
                     users.updateOne(user)
                     client.messages().send(actor)
-                        .keyboard(createCancelKeyboard(translation, Command.FormsChatsCancel.value))
+                        .keyboard(
+                            createCancelKeyboard(
+                                translation,
+                                Payload().setCommand(Command.FormsChatsCancel.value)
+                            )
+                        )
                         .message(translation.data["message_forms_choose"])
                         .peerId(user.id)
                         .randomId(Random.nextInt())
@@ -277,38 +327,12 @@ class VkBot(
                     users.updateOne(user)
                     work(user, translation, message, Payload().setCommand(Command.Menu.value))
                 }
-                Command.Settings.value -> {
-                    client.messages().send(actor)
-                        .keyboard(createSettingsKeyboard(translation))
-                        .message(translation.data["message_settings"])
-                        .peerId(user.id)
-                        .randomId(Random.nextInt())
-                        .execute()
-                }
                 Command.SetAge.value -> {
                     user.command = InputCommand.SetAge
                     users.updateOne(user)
                     client.messages().send(actor)
-                        .keyboard(
-                            if (user.age != 0) {
-                                createCancelKeyboard(translation, Command.SetAgeCancel.value)
-                            } else {
-                                createEmptyKeyboard()
-                            }
-                        )
+                        .keyboard(createEmptyKeyboard())
                         .message(translation.data["message_set_age"])
-                        .peerId(user.id)
-                        .randomId(Random.nextInt())
-                        .execute()
-                }
-                Command.SetAgeCancel.value -> {
-                    user.command = null
-                    users.updateOne(user)
-                    work(user, translation, message, Payload().setCommand(Command.Settings.value))
-                }
-                Command.Subscription.value -> {
-                    client.messages().send(actor)
-                        .message(translation.data["message_subscription"])
                         .peerId(user.id)
                         .randomId(Random.nextInt())
                         .execute()
@@ -325,7 +349,9 @@ class VkBot(
                     user.command = InputCommand.RemoveAdmin
                     users.updateOne(user)
                     client.messages().send(actor)
-                        .keyboard(createCancelKeyboard(translation, Command.RemoveAdminCancel.value))
+                        .keyboard(
+                            createCancelKeyboard(translation, Payload().setCommand(Command.RemoveAdminCancel.value))
+                        )
                         .message(translation.data["message_remove_admin"])
                         .peerId(user.id)
                         .randomId(Random.nextInt())
@@ -335,7 +361,7 @@ class VkBot(
                     user.command = InputCommand.SetAdmin
                     users.updateOne(user)
                     client.messages().send(actor)
-                        .keyboard(createCancelKeyboard(translation, Command.SetAdminCancel.value))
+                        .keyboard(createCancelKeyboard(translation, Payload().setCommand(Command.SetAdminCancel.value)))
                         .message(translation.data["message_set_admin"])
                         .peerId(user.id)
                         .randomId(Random.nextInt())
@@ -462,7 +488,7 @@ class VkBot(
                                 if (index in themes.indices) {
                                     interests.insertOne(Interest(user.id, themes[index]))
                                     client.messages().send(actor)
-                                        .message(translation.data["message_set_interest_data"])
+                                        .message(translation.data["message_set_interest_data_" + themes[index].value])
                                         .peerId(user.id)
                                         .randomId(Random.nextInt())
                                         .execute()
@@ -488,14 +514,9 @@ class VkBot(
                                 interests.findOne(Interest::data eq "")?.let { interest ->
                                     interest.data = message.message.text
                                     interests.updateOne(interest)
-                                    client.messages().send(actor)
-                                        .message(translation.data["message_set_interest_data_success"])
-                                        .peerId(user.id)
-                                        .randomId(Random.nextInt())
-                                        .execute()
                                     user.command = null
                                     users.updateOne(user)
-                                    work(user, translation, message, Payload().setCommand(Command.FillForm.value))
+                                    work(user, translation, message, Payload().setCommand(Command.FormsUsers.value))
                                 } ?: run {
                                     client.messages().send(actor)
                                         .message(translation.data["message_set_interest_data_failed"])
@@ -636,10 +657,7 @@ class VkBot(
                             Payload()
                                 .setCommand(Command.Start.value)
                         } else {
-                            GSON.fromJson(
-                                message.message.payload ?: GSON.toJson(Payload()),
-                                Payload::class.java
-                            )
+                            GSON.fromJson(message.message.payload ?: GSON.toJson(Payload()), Payload::class.java)
                         }
                     )
                 }
@@ -690,24 +708,6 @@ class VkBot(
         }
 
         @JvmStatic
-        private fun createStartKeyboard(translation: Translation): Keyboard {
-            return Keyboard().setButtons(
-                listOf(
-                    listOf(
-                        KeyboardButton()
-                            .setAction(
-                                KeyboardButtonAction()
-                                    .setLabel(translation.data["label_next"])
-                                    .setPayload(GSON.toJson(Payload().setCommand(Command.Menu.value)))
-                                    .setType(TemplateActionTypeNames.TEXT)
-                            )
-                            .setColor(KeyboardButtonColor.POSITIVE)
-                    )
-                )
-            )
-        }
-
-        @JvmStatic
         private fun createMenuKeyboard(user: User, translation: Translation): Keyboard {
             val buttons =
                 arrayListOf(
@@ -745,8 +745,8 @@ class VkBot(
                 KeyboardButton()
                     .setAction(
                         KeyboardButtonAction()
-                            .setLabel(translation.data["label_settings"])
-                            .setPayload(GSON.toJson(Payload().setCommand(Command.Settings.value)))
+                            .setLabel(translation.data["label_fill_form"])
+                            .setPayload(GSON.toJson(Payload().setCommand(Command.FillForm.value)))
                             .setType(TemplateActionTypeNames.TEXT)
                     )
                     .setColor(KeyboardButtonColor.PRIMARY)
@@ -792,10 +792,44 @@ class VkBot(
                                         .setPayload(GSON.toJson(Payload().setCommand(Command.Menu.value)))
                                         .setType(TemplateActionTypeNames.TEXT)
                                 )
-                                .setColor(KeyboardButtonColor.POSITIVE)
+                                .setColor(KeyboardButtonColor.POSITIVE),
+                            KeyboardButton()
+                                .setAction(
+                                    KeyboardButtonAction()
+                                        .setLabel(translation.data["label_fill_form"])
+                                        .setPayload(GSON.toJson(Payload().setCommand(Command.FillForm.value)))
+                                        .setType(TemplateActionTypeNames.TEXT)
+                                )
+                                .setColor(KeyboardButtonColor.PRIMARY)
                         )
                     )
                 )
+        }
+
+        @JvmStatic
+        private fun createLikedKeyboard(translation: Translation, data: String): Keyboard {
+            return Keyboard()
+                .setButtons(
+                    listOf(
+                        listOf(
+                            KeyboardButton()
+                                .setAction(
+                                    KeyboardButtonAction()
+                                        .setLabel(translation.data["label_view"])
+                                        .setPayload(
+                                            GSON.toJson(
+                                                Payload()
+                                                    .setCommand(Command.ViewLike.value)
+                                                    .setData(data)
+                                            )
+                                        )
+                                        .setType(TemplateActionTypeNames.TEXT)
+                                )
+                                .setColor(KeyboardButtonColor.PRIMARY)
+                        )
+                    )
+                )
+                .setInline(true)
         }
 
         @JvmStatic
@@ -822,51 +856,6 @@ class VkBot(
                     )
                 )
                 .setInline(true)
-        }
-
-        @JvmStatic
-        private fun createSettingsKeyboard(translation: Translation): Keyboard {
-            return Keyboard()
-                .setButtons(
-                    listOf(
-                        listOf(
-                            KeyboardButton()
-                                .setAction(
-                                    KeyboardButtonAction()
-                                        .setLabel(translation.data["label_set_age"])
-                                        .setPayload(GSON.toJson(Payload().setCommand(Command.SetAge.value)))
-                                        .setType(TemplateActionTypeNames.TEXT)
-                                ),
-                            KeyboardButton()
-                                .setAction(
-                                    KeyboardButtonAction()
-                                        .setLabel(translation.data["label_fill_form"])
-                                        .setPayload(GSON.toJson(Payload().setCommand(Command.FillForm.value)))
-                                        .setType(TemplateActionTypeNames.TEXT)
-                                )
-                        ),
-                        listOf(
-                            KeyboardButton()
-                                .setAction(
-                                    KeyboardButtonAction()
-                                        .setLabel(translation.data["label_subscription"])
-                                        .setPayload(GSON.toJson(Payload().setCommand(Command.Subscription.value)))
-                                        .setType(TemplateActionTypeNames.TEXT)
-                                )
-                                .setColor(KeyboardButtonColor.PRIMARY)
-                        ),
-                        listOf(
-                            KeyboardButton()
-                                .setAction(
-                                    KeyboardButtonAction()
-                                        .setLabel(translation.data["label_menu"])
-                                        .setPayload(GSON.toJson(Payload().setCommand(Command.Menu.value)))
-                                        .setType(TemplateActionTypeNames.TEXT)
-                                )
-                                .setColor(KeyboardButtonColor.POSITIVE)
-                        )
-                    )
-                )
         }
 
         @JvmStatic
@@ -924,7 +913,7 @@ class VkBot(
         }
 
         @JvmStatic
-        private fun createCancelKeyboard(translation: Translation, payload: String): Keyboard {
+        private fun createCancelKeyboard(translation: Translation, payload: Payload): Keyboard {
             return Keyboard()
                 .setButtons(
                     listOf(
@@ -932,11 +921,11 @@ class VkBot(
                             KeyboardButton()
                                 .setAction(
                                     KeyboardButtonAction()
-                                        .setLabel(translation.data["label_cancel"])
-                                        .setPayload(GSON.toJson(Payload().setCommand(payload)))
+                                        .setLabel(translation.data["label_menu"])
+                                        .setPayload(GSON.toJson(payload))
                                         .setType(TemplateActionTypeNames.TEXT)
                                 )
-                                .setColor(KeyboardButtonColor.NEGATIVE)
+                                .setColor(KeyboardButtonColor.POSITIVE)
                         )
                     )
                 )
